@@ -17,6 +17,7 @@ test.describe('RetailOps production workstation with native storage and server t
   let admin: APIRequestContext;
 
   test.beforeAll(async ({ playwright, baseURL }) => {
+    test.setTimeout(120_000);
     expect(baseURL).toBeTruthy();
     const target = new URL(baseURL!);
     expect(['127.0.0.1', 'localhost', '[::1]']).toContain(target.hostname);

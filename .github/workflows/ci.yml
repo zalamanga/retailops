@@ -163,6 +163,7 @@ jobs:
             artifacts/test-results/RetailOps.Tests.trx
             artifacts/browser-results.json
             frontend/test-results/browser/**/test-failed-*.png
+            frontend/test-results/browser/**/error-context.md
           if-no-files-found: ignore
           include-hidden-files: false
           retention-days: 7

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
+import { expect, type APIRequestContext, type BrowserContext, type Page, type Response } from '@playwright/test';
 import type { Branch, Journal, RetailCatalog, RetailReport, Sale, Shift } from '../src/retail-types';
 import type { QueuedSale } from '../src/offline';
 import type { User } from '../src/types';
@@ -7,6 +7,7 @@ import type { User } from '../src/types';
 export const trainingPassword = process.env.RETAILOPS_E2E_PASSWORD || 'ReviewWorkspaceAccess947!';
 export const administratorEmail = process.env.RETAILOPS_E2E_ADMIN || 'operations@retailops.test';
 export const workstationDatabase = 'retailops-workstation-v1';
+type AuthenticationPath = '/auth/login' | '/auth/setup';
 
 export interface RetailTraining {
   branch: Branch;
@@ -26,9 +27,14 @@ export async function json<T>(request: APIRequestContext, path: string): Promise
 
 export async function mutate<T>(request: APIRequestContext, path: string, data?: unknown, method = 'POST', key?: string): Promise<T> {
   const csrf = await json<{ token: string }>(request, '/auth/csrf');
-  const response = await request.fetch(`/api${path}`, {
+  const send = () => request.fetch(`/api${path}`, {
     method, data, headers: { 'X-CSRF-TOKEN': csrf.token, ...(key ? { 'Idempotency-Key': key } : {}) },
   });
+  let response = await send();
+  if (method.toUpperCase() === 'POST' && (path === '/auth/login' || path === '/auth/setup') && response.status() === 429) {
+    await waitForAuthenticationWindow(path, response.headers()['retry-after']);
+    response = await send();
+  }
   expect(response.ok(), `${method} ${path}: ${response.status()} ${await response.text()}`).toBe(true);
   return response.status() === 204 ? undefined as T : response.json() as Promise<T>;
 }
@@ -78,17 +84,53 @@ export async function signIn(page: Page, email: string): Promise<User> {
 }
 
 export async function signInCurrentPage(page: Page, email: string): Promise<User> {
+  const startingHash = new URL(page.url()).hash;
   await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
   await page.getByLabel('Email address', { exact: true }).fill(email);
   await page.getByLabel('Password', { exact: true }).fill(trainingPassword);
-  const authenticated = page.waitForResponse(response => new URL(response.url()).pathname === '/api/auth/login' && response.request().method() === 'POST');
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  const response = await authenticated;
+  const response = await submitAuthentication(page, '/auth/login', 'Sign in');
   expect(response.status()).toBe(200);
   const user = await response.json() as User;
   expect(user.organizationId).toMatch(/^[0-9a-f-]{36}$/i);
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeAttached();
+  if (['', '#', '#/'].includes(startingHash)) {
+    if (user.role === 'Cashier') {
+      await expect.poll(() => new URL(page.url()).hash).toBe('#/pos');
+      await expect(page.getByRole('heading', { name: 'Kasir cabang', exact: true })).toBeVisible();
+    } else {
+      await expect(page.getByRole('heading', { name: 'Operations overview', exact: true })).toBeVisible();
+    }
+  }
   return user;
+}
+
+export async function submitAuthentication(page: Page, path: AuthenticationPath, buttonName: string): Promise<Response> {
+  const submit = async () => {
+    const received = page.waitForResponse(response => new URL(response.url()).pathname === `/api${path}` && response.request().method() === 'POST', { timeout: 45_000 });
+    await page.getByRole('button', { name: buttonName, exact: true }).click();
+    return received;
+  };
+  let response = await submit();
+  if (response.status() === 429) {
+    await waitForAuthenticationWindow(path, response.headers()['retry-after']);
+    response = await submit();
+  }
+  return response;
+}
+
+async function waitForAuthenticationWindow(path: AuthenticationPath, retryAfter: string | undefined) {
+  const maximumWait = 61_000;
+  const header = retryAfter?.trim();
+  const requested = header && /^\d+$/.test(header)
+    ? Number(header) * 1000
+    : header ? Date.parse(header) - Date.now() : NaN;
+  const wait = Number.isFinite(requested) && requested >= 0 && requested <= maximumWait ? Math.ceil(requested) : maximumWait;
+  console.info(`[RetailOps browser auth] ${path}: HTTP 429; wait ${wait} ms, then one retry (attempt 2/2).`);
+  for (let remaining = wait; remaining > 0;) {
+    const interval = Math.min(remaining, 30_000);
+    await new Promise<void>(resolve => setTimeout(resolve, interval));
+    remaining -= interval;
+  }
 }
 
 type WorkstationStore = 'identities' | 'snapshots' | 'sales' | 'operations';

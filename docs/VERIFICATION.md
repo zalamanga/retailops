@@ -41,6 +41,8 @@ Label form bersama semula memasukkan seluruh pilihan select ke nama aksesibel. K
 
 Dua koreksi harness tidak mengubah aplikasi: GET tidak lagi menghabiskan batas route intersepsi POST, dan tes respons hilang menunggu server menerima serta browser kehilangan respons sebelum membaca uncertainty. Pemeriksaan key/payload, stock, receipt dan journal tetap dipertahankan. Run gagal awal disimpan sebagai diagnostik lokal dan tidak dilabeli sebagai hasil lulus.
 
+CI yang lebih cepat juga menemukan precondition navigasi: shell sudah menampilkan tombol keluar sebelum redirect Cashier dari root selesai. Helper login sekarang menunggu URL/heading tujuan yang sah sebelum tindakan berikutnya. Login fixture hanya boleh mengulang HTTP429 satu kali setelah Retry-After atau satu window61 detik; status lain tetap gagal. Batas autentikasi aplikasi **20 percobaan/IP/menit tetap berlaku**, tanpa mode bypass khusus CI. Artifact kegagalan hanya menambahkan konteks halaman sintetis untuk diagnosis.
+
 ## Review UI pada build akhir
 
 Tujuh [screenshot aplikasi](../README.md) diambil dari Docker8150 dan ditinjau langsung. Hero1440x1250 memperlihatkan katalog, keranjang serta checkout; gambar lain menunjukkan antrean offline nyata sebelum sinkronisasi, struk server, laporan, jurnal, assignment cabang dan cart390px. Pengambilan ulang memakai hasil command yang sama, tanpa membuat penjualan dokumentasi berulang.

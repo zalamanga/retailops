@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Response } from '@playwright/test';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { submitAuthentication } from './retail-support';
 
 const password = 'ReviewWorkspaceAccess947!';
 const adminEmail = 'operations@retailops.test';
@@ -26,9 +27,8 @@ test('purchasing, receiving, stock control, staff access, and mobile workspace',
     await page.getByLabel('Your full name', { exact: true }).fill('Operations administrator');
     await page.getByLabel('Email address', { exact: true }).fill(adminEmail);
     await page.getByLabel('Password', { exact: true }).fill(password);
-    const created = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/auth/setup' && response.request().method() === 'POST', { timeout: 45_000 });
-    await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
-    expect((await created).status()).toBe(200);
+    const created = await submitAuthentication(page, '/auth/setup', 'Create workspace');
+    expect(created.status()).toBe(200);
   } else {
     await signIn(page, adminEmail);
   }
@@ -292,13 +292,15 @@ function waitForWrite(page: Page, pathname: string): Promise<Response> {
 }
 
 async function signIn(page: Page, email: string) {
+  const startingHash = new URL(page.url()).hash;
   await expect(page.getByRole('heading', { name: 'Welcome back', exact: true })).toBeVisible();
   await page.getByLabel('Email address', { exact: true }).fill(email);
   await page.getByLabel('Password', { exact: true }).fill(password);
-  const authenticated = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/auth/login' && response.request().method() === 'POST', { timeout: 45_000 });
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  expect((await authenticated).status()).toBe(200);
+  const authenticated = await submitAuthentication(page, '/auth/login', 'Sign in');
+  expect(authenticated.status()).toBe(200);
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
+  if (['', '#', '#/'].includes(startingHash))
+    await expect(page.getByRole('heading', { name: 'Operations overview', exact: true })).toBeVisible();
 }
 
 async function createOrder(page: Page, supplierId: string, warehouseId: string, productId: string, quantity: number, cost: number) {
