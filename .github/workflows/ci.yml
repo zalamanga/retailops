@@ -1,0 +1,168 @@
+name: Verify RetailOps
+
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/screenshots/**'
+      - 'LICENSE'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retailops-verify-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: retailops_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d retailops_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+          --memory 512m
+          --shm-size 64m
+    env:
+      DOTNET_NOLOGO: 1
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      RETAILOPS_TEST_CONNECTION: Host=localhost;Port=5432;Database=retailops_test;Username=postgres;Password=postgres
+      POSTGRES_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/**/packages.lock.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Restore locked .NET dependencies
+        run: dotnet restore RetailOps.slnx --locked-mode
+      - name: Build .NET
+        run: dotnet build RetailOps.slnx -c Release --no-restore
+      - name: Test inherited workflows, retail authorization, and PostgreSQL transactions
+        run: dotnet test RetailOps.slnx -c Release --no-build --no-restore --logger "trx;LogFileName=RetailOps.Tests.trx" --results-directory artifacts/test-results
+      - name: Restore locked frontend dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - name: Test frontend
+        run: npm test
+        working-directory: frontend
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Verify production shell, purchasing, and offline retail workflows
+        shell: bash
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          Security__SecureCookies: "false"
+          ConnectionStrings__Database: Host=localhost;Port=5432;Database=retailops_test;Username=postgres;Password=postgres
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:5188
+          RETAILOPS_E2E: "1"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/artifacts/browser-results.json
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p backend/RetailOps.Api/wwwroot artifacts
+          cp -R frontend/dist/. backend/RetailOps.Api/wwwroot/
+          api_dll="$PWD/backend/RetailOps.Api/bin/Release/net10.0/RetailOps.Api.dll"
+          content_root="$PWD/backend/RetailOps.Api"
+          dotnet "$api_dll" --migrate --contentRoot "$content_root"
+          runtime_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$runtime_password"
+          docker exec -i --env APP_DB_PASSWORD="$runtime_password" "$POSTGRES_CONTAINER_ID" sh -s < scripts/postgres/10-runtime-role.sh
+          docker exec -i --env PGPASSWORD="$runtime_password" "$POSTGRES_CONTAINER_ID" \
+            psql --host=127.0.0.1 --username=retailops_runtime --dbname=retailops_test --set=ON_ERROR_STOP=1 <<'SQL'
+          DO $privileges$
+          BEGIN
+              IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_user
+                  AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)) THEN
+                  RAISE EXCEPTION 'Runtime database role has excessive capabilities';
+              END IF;
+              IF has_schema_privilege(current_user, 'public', 'CREATE')
+                  OR has_database_privilege(current_user, current_database(), 'CREATE')
+                  OR has_database_privilege(current_user, current_database(), 'TEMPORARY') THEN
+                  RAISE EXCEPTION 'Runtime database role can create schema objects';
+              END IF;
+              BEGIN
+                  EXECUTE 'CREATE TABLE public.retailops_permission_probe (id integer)';
+                  RAISE EXCEPTION 'Runtime database role unexpectedly created a table';
+              EXCEPTION WHEN insufficient_privilege THEN
+                  NULL;
+              END;
+          END
+          $privileges$;
+          SQL
+          export ConnectionStrings__Database="Host=localhost;Port=5432;Database=retailops_test;Username=retailops_runtime;Password=$runtime_password"
+          server_log="$(mktemp "$RUNNER_TEMP/retailops-browser-XXXXXX.log")"
+          dotnet "$api_dll" --contentRoot "$content_root" --urls http://127.0.0.1:5188 > "$server_log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          deadline=$((SECONDS + 60))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "RetailOps exited before the browser server became ready." >&2
+              exit 1
+            fi
+            if curl --fail --silent --max-time 2 http://127.0.0.1:5188/health/ready > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "RetailOps did not become ready before the browser deadline." >&2
+            exit 1
+          fi
+          cd frontend
+          npm run test:browser -- --workers=1 --forbid-only --trace=off --reporter=line,json --output=test-results/browser
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          const report = JSON.parse(readFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE, 'utf8'));
+          if (!(report.stats.expected > 0) || report.stats.skipped !== 0)
+            throw new Error('Browser verification must execute tests with zero skipped cases.');
+          JS
+      - name: Validate local Compose configuration
+        env:
+          RETAILOPS_DOMAIN: retailops.example.invalid
+          CADDY_EMAIL: operations@example.invalid
+          APP_DB_PASSWORD: ci-configuration-check-only
+        run: |
+          docker compose config --quiet
+          docker compose -f compose.yml -f compose.production.yml config --quiet
+      - name: Build application container
+        run: docker build --tag retailops:ci .
+      - name: Preserve selected verification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: retailops-verification-${{ github.run_attempt }}
+          path: |
+            artifacts/test-results/RetailOps.Tests.trx
+            artifacts/browser-results.json
+            frontend/test-results/browser/**/test-failed-*.png
+          if-no-files-found: ignore
+          include-hidden-files: false
+          retention-days: 7

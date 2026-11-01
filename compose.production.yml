@@ -1,0 +1,57 @@
+services:
+  postgres:
+    ports: !reset []
+    environment:
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Generate independent production credentials with scripts/init-env.ps1 -Production}
+    volumes:
+      - ./scripts/postgres/10-runtime-role.sh:/docker-entrypoint-initdb.d/10-runtime-role.sh:ro
+
+  migrate:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Security__SecureCookies: "true"
+
+  app:
+    ports: !reset []
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Security__SecureCookies: "true"
+      Security__TrustedProxies__0: 172.30.90.10
+      AllowedHosts: ${RETAILOPS_DOMAIN:?Set the public DNS name without scheme or path}
+      ConnectionStrings__Database: Host=postgres;Port=5432;Database=${POSTGRES_DB:-retailops};Username=retailops_runtime;Password=${APP_DB_PASSWORD:?Generate independent production credentials with scripts/init-env.ps1 -Production};Maximum Pool Size=20
+    networks:
+      - default
+      - edge
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      RETAILOPS_DOMAIN: ${RETAILOPS_DOMAIN:?Set the public DNS name without scheme or path}
+      CADDY_EMAIL: ${CADDY_EMAIL:?Set an operational certificate contact email}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./scripts/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      edge:
+        ipv4_address: 172.30.90.10
+    mem_limit: 128m
+    cpus: 0.25
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 172.30.90.0/24
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,78 @@
+name: retailops
+
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-retailops}
+      POSTGRES_DB: ${POSTGRES_DB:-retailops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/init-env.ps1 first}
+    ports:
+      - "127.0.0.1:5450:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    shm_size: 64mb
+    mem_limit: 256m
+    cpus: 0.5
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=40"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  migrate:
+    image: retailops:local
+    build:
+      context: .
+    command: ["--migrate"]
+    restart: "no"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Security__SecureCookies: "false"
+      ConnectionStrings__Database: Host=postgres;Port=5432;Database=${POSTGRES_DB:-retailops};Username=${POSTGRES_USER:-retailops};Password=${POSTGRES_PASSWORD:?Run scripts/init-env.ps1 first};Maximum Pool Size=20
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 384m
+    cpus: 0.75
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      disable: true
+
+  app:
+    image: retailops:local
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8150:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Security__SecureCookies: "false"
+      DataProtection__KeyPath: /home/app/.aspnet/DataProtection-Keys
+      ConnectionStrings__Database: Host=postgres;Port=5432;Database=${POSTGRES_DB:-retailops};Username=${POSTGRES_USER:-retailops};Password=${POSTGRES_PASSWORD:?Run scripts/init-env.ps1 first};Maximum Pool Size=20
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - app_keys:/home/app/.aspnet/DataProtection-Keys
+    mem_limit: 384m
+    cpus: 0.75
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  postgres_data:
+  app_keys:
