@@ -2,15 +2,17 @@
 
 Verifikasi lokal pada 1 November 2026 memakai PostgreSQL 18.6, SDK .NET 10.0.403, Node.js22 dan Microsoft Edge headless. Database bisnis, database per-test, dan database browser terpisah. Semua data yang dimasukkan oleh pengujian bersifat sintetis.
 
+**CI final completed/success:** [run41322384020](https://github.com/zalamanga/retailops/actions/runs/41322384020), source `aa0e1add7aa9a7073f60345e8d100e47782a1c66`. Ubuntu menjalankan **76 backend +36 unit frontend +10 browser =122 tes lulus**, tanpa tes backend/browser yang di-skip. Run yang sama membuktikan role runtime tidak dapat membuat objek schema, konfigurasi Compose valid, dan image `retailops:ci` berhasil dibangun. Commit dokumentasi setelah source tersebut tidak mengubah aplikasi atau pengujiannya.
+
 ## Hasil yang dijalankan
 
 | Pemeriksaan | Hasil |
 |---|---|
 | Restore .NET dengan lockfile, build Release | Lulus |
 | Backend dengan PostgreSQL nyata | **76/76 lulus**, 0 gagal, 0 skip |
-| Frontend Vitest/jsdom | **35/35 lulus**, 6 file, 119,43 detik pada run penuh lokal; setelah penambahan regresi reconnect, **7/7 tes App** lulus dan typecheck/build diulang |
+| Frontend Vitest/jsdom | **36/36 lulus di CI**, 6 file; lokal35/35 pada baseline, lalu7/7 App setelah regresi reconnect dan typecheck/build diulang |
 | TypeScript dan build frontend production | Lulus; shell service worker ikut dihasilkan |
-| Browser production shell dengan server/IndexedDB/service worker nyata | Sembilan kasus lulus dalam run penuh; satu kasus respons hilang lulus pada rerun terfokus setelah koreksi sinkronisasi harness |
+| Browser production shell dengan server/IndexedDB/service worker nyata | **10/10 lulus di CI**, 33,3 detik, 0 skip; lokal9 kasus lulus dalam run penuh dan1 respons hilang lulus pada rerun terfokus setelah koreksi harness |
 | Build image Docker dan startup Compose | Lulus; app8150 dan PostgreSQL5450 sehat |
 | Konfigurasi Compose lokal dan overlay production | Validasi konfigurasi lulus |
 | Seeder workspace kosong | Lulus: 3 cabang, 6 produk, PO disetujui akun berbeda, 3 penjualan dan retur parsial; jurnal/neraca seimbang |

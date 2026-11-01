@@ -113,6 +113,8 @@ SDK dipatok pada [global.json](global.json); Node.js 22.12+ diperlukan untuk fro
 
 Test backend memakai PostgreSQL sungguhan dan database sementara berawalan `retailops_test_`. Jangan mengarahkan koneksi test ke database kerja. Pengujian offline harus memakai frontend hasil build yang dilayani API, bukan Vite development server. Hasil dan batas verifikasi dicatat di [VERIFICATION](docs/VERIFICATION.md).
 
+[CI final](https://github.com/zalamanga/retailops/actions/runs/41322384020) lulus: **76 backend, 36 unit frontend, 10 skenario browser**, pemeriksaan hak database runtime, serta build image Docker. Screenshot README juga berasal dari Docker yang dijalankan secara lokal.
+
 ## Panduan
 
 - [Tutorial per file dan function](docs/PANDUAN-KODE.md)
